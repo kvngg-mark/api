@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fast HLS Stream Player</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --border: rgba(255, 255, 255, 0.08);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 900px;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; }
+
+    .form-group { display: flex; flex-direction: column; gap: 0.4rem; }
+
+    label { font-size: 0.8rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; }
+
+    input, select, button {
+      background: #0f172a;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.65rem 0.85rem;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      outline: none;
+    }
+
+    button {
+      background: var(--accent);
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 1rem;
+      border: none;
+    }
+
+    button:hover { background: var(--accent-hover); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .player-container {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-top: 1rem;
+    }
+
+    video { width: 100%; height: 100%; display: block; }
+
+    .providers-list { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
+
+    .provider-btn {
+      background: rgba(255, 255, 255, 0.05);
+      padding: 0.4rem 0.8rem;
+      font-size: 0.85rem;
+      margin-top: 0;
+    }
+
+    .provider-btn.active { background: var(--accent); }
+
+    .status { font-size: 0.9rem; color: var(--text-muted); min-height: 1.25rem; margin-top: 0.5rem; }
+    .status.error { color: #ef4444; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div class="card">
+      <h2>HLS Resolver Tester</h2>
+      
+      <div class="form-group" style="margin-bottom: 1rem;">
+        <label for="apiUrl">FastAPI Backend URL</label>
+        <input type="text" id="apiUrl" placeholder="https://<codespace>-8000.app.github.dev" />
+      </div>
+
+      <form id="resolver-form">
+        <div class="grid">
+          <div class="form-group">
+            <label for="mode">Mode</label>
+            <select id="mode">
+              <option value="tmdb">TMDB</option>
+              <option value="anime">Anime (AniList/MAL)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="media-id" id="id-label">TMDB ID</label>
+            <input type="number" id="media-id" value="550" required />
+          </div>
+
+          <div class="form-group" id="type-group">
+            <label for="type">Type</label>
+            <select id="type">
+              <option value="movie">Movie</option>
+              <option value="tv">TV Show</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="season">Season</label>
+            <input type="number" id="season" value="1" min="1" />
+          </div>
+
+          <div class="form-group">
+            <label for="episode">Episode</label>
+            <input type="number" id="episode" value="1" min="1" />
+          </div>
+        </div>
+
+        <button type="submit" id="submit-btn">Resolve Streams</button>
+      </form>
+      <div id="status-msg" class="status"></div>
+    </div>
+
+    <div class="card hidden" id="player-card">
+      <h3 id="media-title">Ready</h3>
+      
+      <div class="player-container">
+        <video id="video" controls autoplay muted crossorigin="anonymous"></video>
+      </div>
+
+      <div style="margin-top: 1rem;">
+        <label>Available Providers</label>
+        <div id="providers-container" class="providers-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const defaultApi = "https://shiny-palm-tree-p7r7xq4rrx6rf6gqq-8000.app.github.dev";
+    const apiUrlInput = document.getElementById("apiUrl");
+    apiUrlInput.value = localStorage.getItem("api_base") || defaultApi;
+
+    const form = document.getElementById("resolver-form");
+    const modeSelect = document.getElementById("mode");
+    const statusMsg = document.getElementById("status-msg");
+    const playerCard = document.getElementById("player-card");
+    const mediaTitle = document.getElementById("media-title");
+    const providersContainer = document.getElementById("providers-container");
+    const video = document.getElementById("video");
+    const submitBtn = document.getElementById("submit-btn");
+
+    let hls = null;
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const baseUrl = apiUrlInput.value.replace(/\/$/, "");
+      localStorage.setItem("api_base", baseUrl);
+
+      statusMsg.className = "status";
+      statusMsg.textContent = "Resolving streams... (5-15s)";
+      submitBtn.disabled = true;
+
+      const mode = modeSelect.value;
+      const id = document.getElementById("media-id").value;
+      const type = document.getElementById("type").value;
+      const season = document.getElementById("season").value;
+      const episode = document.getElementById("episode").value;
+
+      let endpoint = mode === "tmdb" 
+        ? `${baseUrl}/api/v1/resolve?tmdb_id=${id}&type=${type}&season=${season}&episode=${episode}`
+        : `${baseUrl}/api/v1/resolve/anime?id=${id}&source=anilist&season=${season}&episode=${episode}`;
+
+      try {
+        const res = await fetch(endpoint);
+        const data = await res.json();
+
+        if (!res.ok) throw new Error(data.detail || "Failed to resolve stream");
+
+        statusMsg.textContent = "";
+        displayResults(data);
+      } catch (err) {
+        statusMsg.className = "status error";
+        statusMsg.textContent = err.message;
+        playerCard.classList.add("hidden");
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    function displayResults(data) {
+      mediaTitle.textContent = data.title;
+      providersContainer.innerHTML = "";
+      playerCard.classList.remove("hidden");
+
+      let firstStreamUrl = null;
+
+      data.providers_found.forEach((prov, idx) => {
+        if (!prov.streams || prov.streams.length === 0) return;
+
+        prov.streams.forEach((st, sIdx) => {
+          const btn = document.createElement("button");
+          btn.className = `provider-btn ${idx === 0 && sIdx === 0 ? "active" : ""}`;
+          btn.textContent = `${prov.provider} (${st.type})`;
+
+          const streamUrl = st.proxy_stream;
+          if (idx === 0 && sIdx === 0) firstStreamUrl = streamUrl;
+
+          btn.addEventListener("click", () => {
+            document.querySelectorAll(".provider-btn").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            playStream(streamUrl);
+          });
+
+          providersContainer.appendChild(btn);
+        });
+      });
+
+      if (firstStreamUrl) playStream(firstStreamUrl);
+    }
+
+    function playStream(url) {
+      if (hls) hls.destroy();
+
+      if (Hls.isSupported()) {
+        hls = new Hls({
+          startLevel: 0,              // Start at lowest bitrate for instant playback
+          maxBufferLength: 10,        // Reduce initial buffering load
+          maxMaxBufferLength: 20,
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 30
+        });
+
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          video.play().catch(() => {});
+        });
+      } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = url;
+        video.play().catch(() => {});
+      }
+    }
+  </script>
+</body>
+</html>
