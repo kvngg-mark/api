@@ -1,0 +1,21 @@
+{
+  "name": "web-torrent-player",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "bash setup.sh",
+    "start": "bash start.sh",
+    "dev": "bash start.sh --watch"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ioredis": "^5.4.1",
+    "webtorrent": "2.8.5"
+  },
+  "overrides": {
+    "uint8-util": "2.2.5",
+    "parse-torrent": "11.0.18"
+  }
+}

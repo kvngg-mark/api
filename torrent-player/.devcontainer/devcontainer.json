@@ -1,0 +1,9 @@
+{
+  "name": "web-torrent-player",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+  "postCreateCommand": "bash setup.sh",
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": { "label": "Torrent Player", "onAutoForward": "openBrowser" }
+  }
+}
