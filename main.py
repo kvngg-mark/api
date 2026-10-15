@@ -26,7 +26,8 @@ app.add_middleware(
 
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "faaa2adb2d69574b980d485c09b18298")
 GO_CODESPACE_URL = "https://shiny-palm-tree-p7r7xq4rrx6rf6gqq-8080.app.github.dev/m3u8-proxy.m3u8"
-LOCAL_GO_PROXY_BASE = os.getenv("GO_PROXY_URL", GO_CODESPACE_URL)
+LOCAL_GO_PROXY_BASE = os.getenv("GO_PROXY_URL", "http://localhost:8080/m3u8-proxy.m3u8")
+FALLBACK_HLS_PATH = os.path.join(os.path.dirname(__file__), "hls_streams.txt")
 ANIME_IDS_URL = "https://raw.githubusercontent.com/Fribb/anime-ids/master/anime-ids.json"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"}
 
@@ -170,6 +171,41 @@ def parse_stream_url(url: str, default_referer: str) -> StreamItem:
         }
     )
 
+
+def is_valid_hls_manifest_text(text: str) -> bool:
+    if not text:
+        return False
+    normalized = text.strip()
+    if not normalized:
+        return False
+    if "Stream Proxy Active" in normalized or "<html" in normalized.lower() or "<!doctype html" in normalized.lower():
+        return False
+    return "#EXTM3U" in normalized and ("#EXTINF" in normalized or "#EXT-X-STREAM-INF" in normalized)
+
+
+def read_fallback_hls_streams() -> List[StreamItem]:
+    if not os.path.exists(FALLBACK_HLS_PATH):
+        return []
+
+    streams: List[StreamItem] = []
+    with open(FALLBACK_HLS_PATH, "r", encoding="utf-8") as handle:
+        for line in handle:
+            candidate = line.strip()
+            if not candidate or not candidate.startswith("http"):
+                continue
+            try:
+                response = httpx.get(candidate, headers=HEADERS, timeout=10.0)
+                if response.status_code != 200:
+                    continue
+                body = response.text[:4096]
+                if not is_valid_hls_manifest_text(body):
+                    continue
+                streams.append(parse_stream_url(candidate, "https://mp4-proxy-vps.shetsharon-070.workers.dev"))
+            except Exception:
+                continue
+    return streams
+
+
 async def test_provider(provider: Dict[str, str], browser) -> Optional[ProviderResult]:
     captured_urls = set()
 
@@ -252,6 +288,15 @@ async def resolve_stream(
     found_providers = [r for r in results if r is not None]
 
     if not found_providers:
+        fallback_streams = read_fallback_hls_streams()
+        if fallback_streams:
+            return MultiStreamResponse(
+                status="success",
+                title=meta["title"],
+                tmdb_id=tmdb_id,
+                media_type=type,
+                providers_found=[ProviderResult(provider="Captured HLS", streams=fallback_streams)]
+            )
         raise HTTPException(status_code=404, detail="No active HLS streams found across any providers.")
 
     return MultiStreamResponse(
